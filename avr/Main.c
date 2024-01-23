@@ -142,6 +142,7 @@ ISR(TIMER0_OVF_vect)
 {
 	TCNT0 = 126;
 	byFlagDisplay = 1; //显示进程置位
+	byFlagKey = 1; //键盘轮询置位
 }
 
 
