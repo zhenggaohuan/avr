@@ -75,6 +75,9 @@ void fnDecomposeNum(unsigned int uNum, unsigned char *pbyaNum);
 
 //程序按键消息处理，在系统状态处理程序里面先处理按键消息，按键消息使得系统状态转移，让后处理根据系统状态设置显示内容
 void fnState(void);
+//通讯模块处理
+void fnComProcess();  //用于处理modbus通讯信息，程序调用的时候是在通讯中断中接收到数据后置位通讯标志位
+
 
 /*全局变量声明*/
 
@@ -132,6 +135,11 @@ int main(void)
 			byFlagState = 0; //系统状态标志置位
 			fnState(); //在系统状态处理程序里面先处理按键消息，按键消息使得系统状态转移，让后处理根据系统状态设置显示内容
 		}
+		if (byFlagCom) //如果系统通讯状态标志置位
+		{
+			byFlagCom = 0; //通讯状态标志位复位
+			fnComProcess(); //处理通讯数据
+		}
 		
 	}
 }
@@ -143,6 +151,11 @@ ISR(TIMER0_OVF_vect)
 	TCNT0 = 126;
 	byFlagDisplay = 1; //显示进程置位
 	byFlagKey = 1; //键盘轮询置位
+}
+
+void fnComProcess()
+{
+	
 }
 
 
@@ -192,162 +205,6 @@ void fnState(void)
 
 
 
-//校表程序
-/*
-void fnDebugAtt7022(void)
-{
-//菜单结构
-const unsigned char byaMenu[2] = {IDM_CHE, IDM_CLE};
-unsigned char byMenuColumn = 0;
-
-//清空屏幕
-fnCleanOutput(2);
-fnCleanOutput(1);
-fnOutputChar(0,byaMenu[byMenuColumn]);
-
-//进入按键处理
-while(1)
-{
-switch(fnGetMessage())
-{
-case ID_KEYMSG_LeftDown:
-byMenuColumn = 0;
-fnOutputChar(0,byaMenu[byMenuColumn]);
-break;
-case ID_KEYMSG_RightDown:
-byMenuColumn = 1;
-fnOutputChar(0, byaMenu[byMenuColumn]);
-break;
-case ID_KEYMSG_MenuDown:
-fnCleanOutput(2);
-fnCleanOutput(1);
-fnCleanOutput(0);
-return;
-break;
-case ID_KEYMSG_EnterDown:
-switch(byaMenu[byMenuColumn])
-{
-case IDM_CHE:
-fnCheckAtt7022();
-fnOutputChar(0,byaMenu[byMenuColumn]);
-break;
-case IDM_CLE:
-fnClearAtt7022();
-break;
-}
-break;
-}
-}
-}
-
-//校表
-void fnCheckAtt7022(void)
-{
-//菜单结构
-unsigned char byCheckI = 0, byCheckU = 0;
-
-//显示校对电流提示信息，为写完
-//	fnOutput(ID_OUTPUT_TYPE_CHAR,2,IDM_NULL);
-//	fnOutput(ID_OUTPUT_TYPE_CHAR,1,IDM_NULL);
-//	fnOutput(ID_OUTPUT_TYPE_CHAR,0,IDM_NULL);
-
-//校对电流
-while(byCheckI==0)
-{
-switch(fnGetMessage())
-{
-case ID_KEYMSG_MenuDown:
-fnCleanOutput(2);
-fnCleanOutput(1);
-fnCleanOutput(0);
-return;
-break;
-case ID_KEYMSG_EnterDown:
-//校表，未写完
-byCheckI = 1;
-break;
-}
-}
-
-//显示校对电压提示信息，未写完
-//	fnOutput(ID_OUTPUT_TYPE_CHAR,2,IDM_NULL);
-//	fnOutput(ID_OUTPUT_TYPE_CHAR,1,IDM_NULL);
-//	fnOutput(ID_OUTPUT_TYPE_CHAR,0,IDM_NULL);
-
-//校对电压
-while(byCheckU==0)
-{
-switch(fnGetMessage())
-{
-case ID_KEYMSG_MenuDown:
-fnCleanOutput(2);
-fnCleanOutput(1);
-fnCleanOutput(0);
-return;
-break;
-case ID_KEYMSG_EnterDown:
-//校表，未写完
-byCheckU= 1;
-break;
-}
-}
-
-//校表完毕，清空显示，退出
-fnCleanOutput(2);
-fnCleanOutput(1);
-fnCleanOutput(0);
-}
-
-//清除参数
-void fnClearAtt7022(void)
-{
-//菜单结构
-const unsigned char byaMenu[2] = {IDM_NO, IDM_YES};
-unsigned char byMenuColumn = 0;
-
-//清空屏幕
-fnCleanOutput(2);
-fnOutputChar(1,byaMenu[byMenuColumn]);
-
-//进入按键处理
-while(1)
-{
-switch(fnGetMessage())
-{
-case ID_KEYMSG_LeftDown:
-byMenuColumn = 0;
-fnOutputChar(1,byaMenu[byMenuColumn]);
-break;
-case ID_KEYMSG_RightDown:
-byMenuColumn = 1;
-fnOutputChar(1,byaMenu[byMenuColumn]);
-break;
-case ID_KEYMSG_MenuDown:
-fnCleanOutput(2);
-fnCleanOutput(1);
-return;
-break;
-case ID_KEYMSG_EnterDown:
-switch(byaMenu[byMenuColumn])
-{
-case IDM_YES:
-//插入函数，清除Att7022表的内容
-fnCleanOutput(2);
-fnCleanOutput(1);
-return;
-break;
-case IDM_NO:
-fnCleanOutput(2);
-fnCleanOutput(1);
-return;
-break;
-}
-break;
-}
-}
-}
-
-*/
 
 
 //电流电压信息显示
