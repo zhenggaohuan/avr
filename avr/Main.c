@@ -12,110 +12,171 @@
 *标志位的置位放置于前台中断程序，因为通讯标志位的置位在通许中断中置位，所以将所有标志位的置位都放于中断标志中，后台程序只复位标志位。
 */
 
-#include <avr/io.h>
+#include <avr/io.h> //包含引脚定义头文件
+#include <avr/interrupt.h>  //包含中断头文件
 
-#include "InputAndOutput.h"
-#include "Fm25040.h"
-#include "Delay.h"
-#include "att7022.h"
 
 /*
 *函数声明部分
 */
 
+/*
+*显示输出定义的字符码
+*/
+#define IDM_NULL 0
+#define IDM_Code 1
+#define IDM_Set  2
+#define IDM_Dis  3
+#define IDM_Conn 4
+#define IDM_CodePut  5
+#define IDM_CodeSet  6
+#define IDM_SetNet  7
+#define IDM_SetPT_U 8
+#define IDM_SetCT_I 9
+#define IDM_SetE_CLE 10
+#define IDM_DisDIS_E 11
+#define IDM_DisDIS_P 12
+#define IDM_DisB_LED 13
+#define IDM_ConnAdd   14
+#define IDM_ConnData  15
+#define IDM_ConnBud   16
+#define IDM_CLE 17
+#define IDM_CHE 18
+#define IDM_YES 19
+#define IDM_NO 20
+#define IDM_SAVE 21
+#define IDM_ERR 22
 
 
-//设置电压测量范围
-float fnSetUValue(ty_uscl eUScl);
-//设置电流测量范围
-float fnSetIValue(ty_iscl eIScl);
-//数显表显示电流电压等信息
-void fnAVMessage(unsigned char byMessage);
-/*	编程设置参数，用户可根据实际情况选择适当的编程设置参数	*/
-unsigned char fnMenuChoose(unsigned char byMessage);
-/*	保存设置，保存修改过的参数	*/
-unsigned char fnSaveSet(unsigned char byMessage);
-//验证密码，当输入的密码正确时才可以进入编程。在函数中用户输入验证密码，并对密码进行验证
-unsigned int fnGetCodePut(unsigned char byMessage);
-//修改密码，密码验证成功才能修改密码。在函数中，用户输入要修改的密码，函数返回用户输入的修改密码
-unsigned int fnGetCodeSet(unsigned char byMessage);
-//网络，选择测量信号的输入网络。函数返回测量信号的输入网络值
-unsigned int fnGetSetNet(unsigned char byMessage);
-//电压变比，设置电压信号变比=1次刻度/2次刻度，例：10KV/100V=100，函数返回电压变比值
-unsigned int fnGetSetPT_U(unsigned char byMessage);
-//获取电流变比值
-unsigned int fnGetSetCT_I(unsigned char byMessage);
-//获取清电能
-unsigned int fnGetSetE_CLE(unsigned char byMessage);
-//获取显示
-unsigned int fnGetDisDISP_E(unsigned char byMessage);
-//获取显示翻页
-unsigned int fnGetDisDIS_P(unsigned char byMessage);
-//获取显示亮度
-unsigned char fnGetDisB_LED(unsigned char byMessage);
-//获取通讯参数地址
-unsigned int fnGetConnAdd(unsigned char byMessage);
-//获取通信参数通讯校验位
-unsigned int fnGetConnData(unsigned char byMessage);
-//获取通信参数通讯速率
-unsigned int fnGetConnBud(unsigned char byMessage);
+#define IDD_NULL 0xffff
+#define IDD_M 0x00ff
+#define  IDD_DI 0x017f
+#define IDD_W 0x01bf
+#define IDD_A 0x01df
+#define IDD_TX 0x01ef
+#define IDD_V 0x01f7
+#define IDD_FXD 0x01fb
+#define IDD_K 0x01fd
+#define IDD_FXU 0x01fe
+
+/*
+*键盘扫描定义的按键消息码
+*/
+#define ID_KEYMSG_Null 0x00
+#define ID_KEYMSG_LeftDown 0xf7
+#define ID_KEYMSG_RightDown 0xfB
+#define ID_KEYMSG_MenuDown 0xfD
+#define ID_KEYMSG_EnterDown 0xfE
+
+//显示定义的消息**************************************************
+#define FlashTime 60
+#define MaxDisplayLightness 120
+#define MaxDisplayTime 60
+#define ID_Max_GatherCount 50
+
+#define ID_DISCODE_NULL 0xff
 
 
-//调试程序
-void fnDebugAtt7022(void);
-//校表
-void fnCheckAtt7022(void);
-//清除参数
-void fnClearAtt7022(void);
+//显示数字的字码
+static const unsigned char g_byaDisplayNumCode[] = {0x50, 0x5f, 0x38, 0x19, 0x17, 0x91, 0x90, 0x55, 0x10, 0x11};
+static const unsigned char g_byaDisplayCode[] = {0x50, 0x5f, 0x38, 0x19, 0x17, 0x91, 0x90, 0x55, 0x10, 0x11, 0x14, 0x92, 0xf0, 0x1a, 0xb0, 0xb4, 0xd0, 0x16, 0xf6, 0x5b, 0x94, 0xf2, 0x54, 0x9e, 0x9a, 0x34, 0x15, 0xbe, 0x91, 0xb2, 0x52, 0xda, 0x12, 0x97, 0x13, 0x38, 0xff};
+//显示亮度，分为6个等级，最大120，最小0。
+static volatile unsigned char g_byDisplayLightness = 120;
+//显示标志：为1时，数码管一直实现，为0时，数码管60S后不显示
+static volatile unsigned char g_byDisplayEnable = 1;
+//剩余显示时间
+static volatile unsigned char g_byDisplayTime = 60;
+//闪烁标志位，为1时，数码管相应位闪烁显示，为0时，数码管不闪烁
+static volatile unsigned char g_byFlashEnable = 0;
+//闪烁位
+static volatile unsigned char g_byFlashDigit = 0;
+//显示内容
+static volatile unsigned char g_byaDisplayContents[3][4] = {{0xff,0xff,0xff,0xff},{0xff,0xff,0xff,0xff},{0xff,0xff,0xff,0xff}};
+static volatile unsigned char g_byaIndicator[2] = {0xff,0xff};
+
+
+
+
+/*
+*显示
+*/
+//数码管扫描显示
+void fnScanLED();
+//数码管闪烁显示
+unsigned char fnDisplay(void);
+
+
+
+/*
+*显示内容
+*/
+//显示字符
+void fnOutputChar(unsigned char byDisplayRow, char * byChar );
+//显示数字
+void fnOutputNum(unsigned char byDisplayRow,float iNum);
+//显示数字字符
+void fnOutputNumChar(unsigned char byDisplayRow, unsigned char * pbyValue);
+//显示指示灯
+void fnOutputIndicator(unsigned int uValue);
+
+/*
+*显示亮度
+*/
+//设置显示亮度
+void fnSetDisplayLightness(unsigned char byDisplayLightness);
+//发光二极管的显示亮度和发光二极管的显示时间有光，显示时间越长，发光二极管就越亮，因此显示延时时间的长度决定了发光二极管的实现亮度
+void fnDelayDisplay(unsigned char byDelayTime);
+
+
+
+/*
+*显示时间
+*/
+//复位当前显示时间，将当前显示时间设定为最大值
+void fnResetDisplayTime();
+//获取当前显示时间
+unsigned char fnGetDisplayTime();
+//开启一直显示功能，使能显示标志位，显示标志位置1，数码管一直显示
+void fnEnableDisplay();
+//关闭一直显示功能，失能显示标志位，显示标志位置0，数码管显示60S
+void fnDisableDisplay();
+
+
+
+/*
+*闪烁
+*/
+//关闭闪烁功能，闪烁标志位置0
+void fnDisableFlash();
+//开启闪烁功能，闪烁标志位置1
+void fnSetFlash(unsigned char byFlashDigit);
 
 //把四代表，个位，十位，百位，千位的数字数组组成一个数字
 unsigned int fnComposeNum(char * pbyaNum);
 //把1个是数字分解成4个代表，个位，十位，百位，千位的数字数组
 void fnDecomposeNum(unsigned int uNum, unsigned char *pbyaNum);
 
-//程序按键消息处理，在系统状态处理程序里面先处理按键消息，按键消息使得系统状态转移，让后处理根据系统状态设置显示内容
-void fnState(void);
-//通讯模块处理
-void fnComProcess();  //用于处理modbus通讯信息，程序调用的时候是在通讯中断中接收到数据后置位通讯标志位
-
+//单片机初始化
+void fnInit();
+//通讯模块处理，用于处理modbus通讯信息，程序调用的时候是在通讯中断中接收到数据后置位通讯标志位
+void fnComProcess(); 
+//获取按键消息码：扫描按键情况，并生成8位扫描码（低4位有效），多个（数量依具体情况设定）相同的扫描码生成一个8位按键码（低4位有效），同时生成一个8位按键消息码，按键消息码位的低4为当前按键码，高4位为前次按键码
+void fnkey();
 
 /*全局变量声明*/
-
-//系统状态:
-enum {E_AVMessage,  //电流信息显示
-	E_MenuChoose,  //菜单选择状态
-	E_MenuSave,  //设置保持
-	E_SetParam_CodePut,  //获取菜单密码，（已经由E_MenuPassword代替）
-	E_SetParam_CodeSet,  //密码设置
-	E_SetParam_SetNet,  //选择测试信号的输入网络
-	E_SetParam_SetPtU,  //设置电压变比
-	E_SetParam_SetCtI,  //设置电流变比
-	E_SetParam_SetECle,  //清电能
-	E_SetParam_DisDispE,  //设置显示
-	E_SetParam_DisDisP,  //设置显示翻页
-	E_SetParam_DisBLed,  //设置显示亮度
-	E_SetParam_ConnAdd, //设置通讯地址
-	E_SetParam_ConnData, //设置通讯校验码
-	E_SetParam_ConnBud //设置通讯波特率
-} eSystemState = E_AVMessage;
-
-ty_osparameter sOSParameter;	 	//系统参数
-
 unsigned char byMessage = 0;  //键盘按键消息
 
 //定义各种进程运行标志，前台中断程序根据各种情况置位进程运行标志，后台程序根据置位的进程运行标志运行进程，并复位进程运行标志
 unsigned char byFlagHalfSecond = 0;  //闪烁变量的处理标志
 unsigned char byFlagDisplay = 0; //显示处理标志
 unsigned char byFlagKey = 0; //键盘轮询标志
-unsigned char byFlagState = 0; //用于系统状态的转移，整个系统是一个状态机的结构，所以每次按键或者时间定时到的时候，会发声状态转移
 unsigned char byFlagCom = 0; //通讯状态标志，如果通讯中断程序有数据接收到，则置位通讯状态标志，后台程序处理通讯数据，复位通讯状态标志
 
 //函数定义部分
 int main(void)
 {
-	//初始化
-	fnKeyInit();	//按键初始化
-	fnDisplayInit(); //显示初始化
+	//单片机初始化
+	fnInit();
 
 	//开始后台程序运行
 	while(1)
@@ -130,11 +191,6 @@ int main(void)
 			byFlagKey = 0; //键盘轮询标志复位
 			fnkey(); //扫描键盘，取按键码，确定操作按键
 		}
-		if (byFlagState) //如果系统状态转移标志复位
-		{
-			byFlagState = 0; //系统状态标志置位
-			fnState(); //在系统状态处理程序里面先处理按键消息，按键消息使得系统状态转移，让后处理根据系统状态设置显示内容
-		}
 		if (byFlagCom) //如果系统通讯状态标志置位
 		{
 			byFlagCom = 0; //通讯状态标志位复位
@@ -145,7 +201,7 @@ int main(void)
 }
 
 
-//定时器0 中断服务器函数
+//定时器T0溢出中断
 ISR(TIMER0_OVF_vect)
 {
 	TCNT0 = 126;
@@ -153,700 +209,64 @@ ISR(TIMER0_OVF_vect)
 	byFlagKey = 1; //键盘轮询置位
 }
 
+//单片机初始化
+void fnInit()
+{
+	//键盘初始化
+	DDRD &= ~(1<<0);	//PD0的DDR置0，设置PD0输入
+	PORTD |= (1<<0);	//PD0的PORT置1，设置PD0上拉电阻使能
+	DDRD &= ~(1<<7);	//PD7的DDR置0，设置PD7输入
+	PORTD |= (1<<7);	//PD7的PORT置1，设置PD7上拉电阻使能
+	DDRG &= ~(1<<1);	//PG1的DDR置0，设置PG1输入
+	PORTG |= (1<<1);	//PG1的PORT置1，设置PG1上拉电阻使能
+	DDRC &= ~(1<<2);	//PC2的DDR置0，设置PC2输入
+	PORTC |= (1<<2);	//PC2的PORT置1，设置PC2上拉电阻使能
+	
+	//显示初始化
+	PORTA = 0xff;
+	DDRA = 0xff;
+	PORTC &= ~(1<<7);
+	DDRC |= (1<<7);
+	PORTG &= ~(1<<2);
+	DDRG |= (1<<2);
+	DDRB |= 1<<DDRB0;
+	PORTB |= 1<<PORTB0;
+	
+	//定时器 计时器中断初始化T/C0
+	TIMSK |= (1<<TOIE0);
+	TCCR0 |= (1<<CS02)|(1<<CS01)|(1<<CS00);
+	TCNT0 = 126; //设置计数器的值
+
+	//开总中断 	
+	asm("sei"); //这个是用汇编插入的方式开总中断 
+}
+
 void fnComProcess()
 {
 	
 }
 
-
-//程序按键消息处理，在系统状态处理程序里面先处理按键消息，按键消息使得系统状态转移，让后处理根据系统状态设置显示内容
-void fnState(void)
+//获取按键消息
+void fnkey()
 {
-	//如果是有效按键，就让显示屏显示时间置位
-	switch(eSystemState)//根据“系统状态表”进入相应函数处理“按键信息”，并产生“输出信息"
+	static unsigned char byKeyCode = 0x00;	//按键消息码，
+	static int nGatherCount =0;	//采集按键闭合情况计数器
+	static unsigned char byPreviousGather  = 0x00;	//前次按键闭合，生成的按键码
+	unsigned char byCurrentGather;	//当前按钮闭合，生成的按键码
+
+	//采集按键闭合情况，如果是单个按键闭合，则所产生的按键码是唯一的，如果两个或两个以上的按键闭合，则产生的按键码会与单个按键闭合产生的按键码不同，按键对应的按键码为，K4：00001110，K3：00001101，K2：00001011，K1：00000111，无按键：00001111，无效码：00000000
+	byCurrentGather = (PIND&0x01)|(PING&0x02)|((PIND&0x80)>>5)|((PINC&0x04)<<1);	//取当前按键码，并把高4位置0
+	if( ~(byCurrentGather|0xF0) || ~byKeyCode || ~(byPreviousGather|0xF0))	//如果有按键码或有按键命令码，执行如下程序，（就是说，当扫描到有按键按下，或命令码中还有按键命令，才执行程序。如果无按键按下并且命令码里面也没有按键命令，则表示单品机无任何输入）
 	{
-		case E_AVMessage:  //电流信息显示状态
-		fnAVMessage(byMessage);
-		break;
-		case E_MenuChoose:  //菜单选择状态
-		fnMenuChoose(byMessage);
-		break;
-		case E_MenuSave: //保存菜单设置
-		break;
-		case E_SetParam_CodePut: //验证密码
-		break;
-		case E_SetParam_CodeSet: //密码设置
-		fnGetCodeSet(byMessage);
-		break;
-		case E_SetParam_SetNet: //选择测试信号的输入网络
-		break;
-		case E_SetParam_SetPtU: //电压变比
-		break;
-		case E_SetParam_SetCtI: //电流变比
-		break;
-		case E_SetParam_SetECle: //清电能
-		break;
-		case E_SetParam_DisDispE: //显示设置，显示
-		break;
-		case E_SetParam_DisDisP: //显示设置，显示翻页
-		break;
-		case E_SetParam_DisBLed: //显示设置，显示亮度
-		break;
-		case E_SetParam_ConnAdd: //通讯地址
-		break;
-		case E_SetParam_ConnData: //通讯校验位
-		break;
-		case E_SetParam_ConnBud: //通讯波特率
-		break;
-	}
-}
-
-
-
-
-
-
-
-//电流电压信息显示
-void fnAVMessage(unsigned char byMessage)
-{
-	unsigned char byMeterDis = 1;
-	
-	switch(byMessage)
-	{
-		case ID_KEYMSG_LeftDown:			//按下Left
-		(byMeterDis>1)?(byMeterDis--):(byMeterDis = 16);
-		break;
-		case ID_KEYMSG_RightDown:			//按下Right
-		(byMeterDis<16)?(byMeterDis++):(byMeterDis =1);
-		break;
-		case ID_KEYMSG_MenuDown:			//按下Menu，进入编程状态
-		eSystemState = E_MenuChoose; //将系统状态调整到密码输入状态
-		break;
-		case ID_KEYMSG_EnterDown:			//按下Enter
-		break;
-	}
-
-	switch(byMeterDis)
-	{
-		case 1: //第一页面，三相电压
-		fnOutputNum(0,12);
-		fnOutputNum(1,0.06);
-		fnOutputNum(2,12.34);
-		fnOutputIndicator(IDD_V);
-		break;
-		case 2: //第二页面，三相电流
-		fnOutputNum(0,byMeterDis);
-		fnOutputNum(1,byMeterDis);
-		fnOutputNum(2,byMeterDis);
-		fnOutputIndicator(IDD_A);
-		break;
-		case 3: //第三页面，三相功率、功率因素
-		fnOutputNum(0,byMeterDis);
-		fnOutputNum(1,byMeterDis);
-		fnOutputNum(2,byMeterDis);
-		fnOutputIndicator(IDD_W);
-		break;
-		case 4: //第四页面，视在功率、频率
-		fnOutputNum(0,byMeterDis);
-		fnOutputNum(1,byMeterDis);
-		fnOutputNum(2,byMeterDis);
-		fnOutputIndicator(IDD_DI);
-		break;
-		case 5: //第五页面，正向有功电能
-		fnOutputNum(0,byMeterDis);
-		fnOutputNum(1,byMeterDis);
-		fnOutputNum(2,byMeterDis);
-		fnOutputIndicator(IDD_NULL);
-		break;
-		case 6: //第六页面，反向有功电能
-		fnOutputNum(0,byMeterDis);
-		fnOutputNum(1,byMeterDis);
-		fnOutputNum(2,byMeterDis);
-		break;
-		case 7: //第七页面，正向有功电能
-		fnOutputNum(0,byMeterDis);
-		fnOutputNum(1,byMeterDis);
-		fnOutputNum(2,byMeterDis);
-		break;
-		case 8: //第八页面，反向无功电能
-		fnOutputNum(0,byMeterDis);
-		fnOutputNum(1,byMeterDis);
-		fnOutputNum(2,byMeterDis);
-		break;
-		case 9: //第九页面，A相电压谐波含量
-		fnOutputNum(0,byMeterDis);
-		fnOutputNum(1,byMeterDis);
-		fnOutputNum(2,byMeterDis);
-		break;
-		case 10: //第十页面，B相电压谐波含量
-		fnOutputNum(0,byMeterDis);
-		fnOutputNum(1,byMeterDis);
-		fnOutputNum(2,byMeterDis);
-		break;
-		case 11: //第十一页面，C相电压谐波含量
-		fnOutputNum(0,byMeterDis);
-		fnOutputNum(1,byMeterDis);
-		fnOutputNum(2,byMeterDis);
-		break;
-		case 12: //第十二页面，A相电流谐波含量
-		fnOutputNum(0,byMeterDis);
-		fnOutputNum(1,byMeterDis);
-		fnOutputNum(2,byMeterDis);
-		break;
-		case 13://第十三页面，B相电流谐波含量
-		fnOutputNum(0,byMeterDis);
-		fnOutputNum(1,byMeterDis);
-		fnOutputNum(2,byMeterDis);
-		break;
-		case 14://第十四页面，C相电流谐波含量
-		fnOutputNum(0,byMeterDis);
-		fnOutputNum(1,byMeterDis);
-		fnOutputNum(2,byMeterDis);
-		break;
-		case 15://第十五页面，三相电压总不平衡度
-		fnOutputNum(0,byMeterDis);
-		fnOutputNum(1,byMeterDis);
-		fnOutputNum(2,byMeterDis);
-		break;
-		case 16://第十六页面，三相电流总不平衡度
-		fnOutputNum(0,byMeterDis);
-		fnOutputNum(1,byMeterDis);
-		fnOutputNum(2,byMeterDis);
-		break;
-	}
-}
-
-
-//编程设置参数
-unsigned char fnMenuChoose(unsigned char byMessage)
-{
-
-	//菜单结构
-	const unsigned char byaMenu[5][5] = {
-		{IDM_Code, IDM_Set, IDM_Dis, IDM_Conn, IDM_NULL},
-		{IDM_CodePut, IDM_CodeSet, IDM_NULL, IDM_NULL, IDM_NULL},
-		{IDM_SetNet, IDM_SetPT_U, IDM_SetCT_I, IDM_SetE_CLE, IDM_NULL},
-		{IDM_DisDIS_E, IDM_DisDIS_P, IDM_DisB_LED,IDM_NULL, IDM_NULL},
-		{IDM_ConnAdd, IDM_ConnData, IDM_ConnBud, IDM_NULL, IDM_NULL}
-	};
-
-	//菜单位置，g_byaMenu[5][5]菜单的位置
-	static unsigned char byMenuRow = 0;
-	static unsigned char byMenuColumn = 0;
-
-	//对系统参数进行备份
-	//ty_osparameter sNewOSParameter = *psOSParameter;
-
-	switch(byMessage)//对按键消息做处理，改变菜单的位置。
-	{
-		case ID_KEYMSG_LeftDown://按下Left，进入同级左菜单
-		if(byMenuColumn)
+		nGatherCount = (byCurrentGather == byPreviousGather)?nGatherCount+1:1;		//如果当前按键码和前按键码相同，按键计数器加1；如果不同，则按键计数器复位为1
+		byPreviousGather = byCurrentGather;		//把前面按键码保留起来，等到下个循环的时候在对比
+		if(nGatherCount >= ID_Max_GatherCount)	   //如果计数器为7，表示已经采集到一个稳定的按键码，那么就把按键码加入到消息码 中，并发送消息。因为按键码只有4位有效，所以，要将消息码的低4位移到高4位，然后把按键码的低4位放入消息码的低4位，计数器要清0，表示重新开始采集计数；
 		{
-			byMenuColumn--;
+			byKeyCode <<= 4;    //要将消息码的低4位移到高4位
+			byKeyCode |= byCurrentGather;    //把按键码的低4位放入消息码的低4位
+			nGatherCount = 0;    //计数器要清0
+			byMessage =  byKeyCode;    //发送消息码
 		}
-		break;
-		case ID_KEYMSG_RightDown://按下Right，进入同级右菜单
-		if(byaMenu[byMenuRow][byMenuColumn+1])
-		{
-			byMenuColumn ++;
-		}
-		break;
-		case ID_KEYMSG_MenuDown:	//按下Menu，返回上级菜单
-		if(byMenuRow) //如果在二层菜单，则返回一层菜单
-		{
-			byMenuColumn = byMenuRow - 1;
-			byMenuRow = 0;
-		}
-		else //在一层菜单，退出保存，***注意，要现实按3次menu健才能退到菜单保存页面
-		{
-			
-			eSystemState = E_MenuSave;
-		}
-		break;
-		case ID_KEYMSG_EnterDown: //按下Enter，进入下级菜单
-		if(byMenuRow) //如果在二层菜单，则进入相应函数，否则表示在一层菜单，进入相应二层菜单
-		{
-			switch(byaMenu[byMenuRow][byMenuColumn])
-			{
-				case IDM_CodeSet: //进入修改密码设置
-				eSystemState = E_SetParam_CodeSet;
-				break;
-				case IDM_SetNet: //进入网络设置
-				eSystemState = E_SetParam_SetNet;
-				break;
-				case IDM_SetPT_U: // 进入电压变比设置
-				eSystemState = E_SetParam_SetPtU;
-				break;
-				case IDM_SetCT_I: //进入电流变比设置
-				eSystemState = E_SetParam_SetCtI;
-				break;
-				case IDM_SetE_CLE: //进入清电能设置
-				eSystemState = E_SetParam_SetECle;
-				break;
-				case IDM_DisDIS_E: //进入显示设置
-				eSystemState = E_SetParam_DisDispE;
-				break;
-				case IDM_DisDIS_P: //进入显示翻页设置
-				eSystemState = E_SetParam_DisDisP;
-				break;
-				case IDM_DisB_LED: //进入显示亮度设置
-				eSystemState = E_SetParam_DisBLed;
-				break;
-				case IDM_ConnAdd: //进入通信地址设置
-				eSystemState = E_SetParam_ConnAdd;
-				break;
-				case IDM_ConnData: //进入通讯校验位设置
-				eSystemState = E_SetParam_ConnData;
-				break;
-				case IDM_ConnBud: //进入通讯波特率设置
-				eSystemState = E_SetParam_ConnBud;
-				break;
-			}
-		}
-		else //表示在1层菜单，者进入2层菜单。
-		{
-			byMenuRow = byMenuColumn + 1;
-			byMenuColumn = 0;
-		}
-		break;
-	}
-	
-	switch (byaMenu[byMenuRow][byMenuColumn])	 //根据当前菜单指针设置显示界面
-	{
-		case IDM_Code:
-		fnOutputChar(0, "code");
-		fnOutputChar(1, "    ");
-		fnOutputChar(2, "    ");
-		break;
-		case IDM_Set:
-		fnOutputChar(0, "set");
-		fnOutputChar(1, "    ");
-		fnOutputChar(2, "    ");
-		break;
-		case IDM_Dis:
-		fnOutputChar(0, "dis");
-		fnOutputChar(1, "    ");
-		fnOutputChar(2, "    ");
-		break;
-		case IDM_Conn:
-		fnOutputChar(0, "conn");
-		fnOutputChar(1, "    ");
-		fnOutputChar(2, "    ");
-		break;
-		case IDM_CodeSet:
-		fnOutputChar(0, "code");
-		fnOutputChar(1, "set");
-		fnOutputChar(2, "    ");
-		break;
-		case IDM_SetNet:
-		fnOutputChar(0, "set");
-		fnOutputChar(1, "net");
-		fnOutputChar(2, "    ");
-		break;
-		case IDM_SetPT_U:
-		fnOutputChar(0, "set");
-		fnOutputChar(1, "pt .u");
-		fnOutputChar(2, "    ");
-		break;
-		case IDM_SetCT_I:
-		fnOutputChar(0, "set");
-		fnOutputChar(1, "ct .i");
-		fnOutputChar(2, "    ");
-		break;
-		case IDM_SetE_CLE:
-		fnOutputChar(0, "set");
-		fnOutputChar(1, "e.cle");
-		fnOutputChar(2, "    ");
-		break;
-		case IDM_DisDIS_E:
-		fnOutputChar(0, "dis");
-		fnOutputChar(1, "dis.e");
-		fnOutputChar(2, "    ");
-		break;
-		case IDM_DisDIS_P:
-		fnOutputChar(0, "dis");
-		fnOutputChar(1, "dis.p");
-		fnOutputChar(2, "    ");
-		break;
-		case IDM_DisB_LED:
-		fnOutputChar(0, "dis");
-		fnOutputChar(1, "b.led");
-		fnOutputChar(2, "    ");
-		break;
-		case IDM_ConnAdd:
-		fnOutputChar(0, "conn");
-		fnOutputChar(1, "add");
-		fnOutputChar(2, "    ");
-		break;
-		case IDM_ConnData:
-		fnOutputChar(0, "conn");
-		fnOutputChar(1, "data");
-		fnOutputChar(2, "    ");
-		break;
-		case IDM_ConnBud:
-		fnOutputChar(0, "dis");
-		fnOutputChar(1, "bud");
-		fnOutputChar(2, "    ");
-		break;
-	}
-}
-
-//保存设置
-unsigned char fnSaveSet(unsigned char byMessage)
-{
-	switch(byMessage)
-	{
-		case ID_KEYMSG_EnterDown:
-		return 1;
-		break;
-		case ID_KEYMSG_MenuDown:
-		return 0;
-		break;
-	}
-	return 0;
-}
-
-
-//设置电压测量范围
-float fnSetUValue(ty_uscl eUScl)
-{
-	switch(eUScl)
-	{
-		case E_100V:
-		return 100.0;
-		break;
-		case E_220V:
-		return 220.0;
-		break;
-		case E_380V:
-		return 380.0;
-		break;
-		default:
-		return 380.0;
-		break;
-	}
-}
-//设置电流测量范围
-float fnSetIValue(ty_iscl eIScl)
-{
-	switch(eIScl)
-	{
-		case E_1A:
-		return 1.0;
-		break;
-		case E_5A:
-		return 5.0;
-		break;
-		default:
-		return 1.0;
-		break;
-	}
-}
-
-
-unsigned int fnGetCodePut(unsigned char byMessage) //获取验证密码
-{
-	//初始化
-	static char byConfirmPassword[4] = {'0', '0', '0', '0'};
-	static unsigned char byEditDigit = 0;
-	
-	fnSetFlash(byEditDigit);
-	switch(byMessage)
-	{
-		
-		case ID_KEYMSG_LeftDown: //按下Left,验证密码相应编辑位减少
-		byConfirmPassword[byEditDigit] = byConfirmPassword[byEditDigit] == '0'?'9':(byConfirmPassword[byEditDigit] - 1);
-		break;
-		case ID_KEYMSG_RightDown: //按下Right,验证密码相应编辑位增加
-		byConfirmPassword[byEditDigit] = byConfirmPassword[byEditDigit] == '9'?'0':(byConfirmPassword[byEditDigit] + 1);
-		break;
-		case ID_KEYMSG_MenuDown: //按下Menu，返回密码
-		fnDisableFlash();
-		byConfirmPassword[0] = '0';
-		byConfirmPassword[1] = '0';
-		byConfirmPassword[2] = '0';
-		byConfirmPassword[3] = '0';
-		byEditDigit = 0;
-		if (sOSParameter.uCode == fnComposeNum(byConfirmPassword))
-		{
-			sOSParameter.byEnablePro = 1;
-		}
-		else
-		{
-			sOSParameter.byEnablePro = 0;
-		}
-		eSystemState = E_MenuChoose;
-		break;
-		case ID_KEYMSG_EnterDown: //按下Enter，改变参数编辑位
-		byEditDigit ++;
-		byEditDigit %= 4;
-		fnSetFlash(byEditDigit);
-		break;
-	}
-	
-	fnOutputChar(0, "code");
-	fnOutputChar(1, "put ");
-	fnOutputChar(2, byConfirmPassword);
-}
-
-//修改密码，密码验证成功才能修改密码。
-unsigned int fnGetCodeSet(unsigned char byMessage)
-{
-	static char byConfirmPassword[4] = {'0', '0', '0', '0'};
-	static unsigned char byEditDigit = 0;
-	unsigned int uCode;
-	
-	fnSetFlash(byEditDigit);
-	switch(byMessage)
-	{
-		//按下Left,验证密码相应编辑位减少
-		case ID_KEYMSG_LeftDown:
-		byConfirmPassword[byEditDigit] = byConfirmPassword[byEditDigit]=='0'?'9':(byConfirmPassword[byEditDigit]-1);
-		break;
-		//按下Right,验证密码相应编辑位增加
-		case ID_KEYMSG_RightDown:
-		byConfirmPassword[byEditDigit] = byConfirmPassword[byEditDigit]=='9'?'0':(byConfirmPassword[byEditDigit]+1);
-		break;
-		//按下Menu，返回密码
-		case ID_KEYMSG_MenuDown:
-		fnDisableFlash();
-		uCode = fnComposeNum(byConfirmPassword);
-		if (uCode)
-		{
-			sOSParameter.uCode = uCode;
-		}
-		byEditDigit = 0;
-		byConfirmPassword[0] = '0';
-		byConfirmPassword[1] = '0';
-		byConfirmPassword[2] = '0';
-		byConfirmPassword[3] = '0';
-		eSystemState = E_MenuChoose;
-		break;
-		//按下Enter，改变参数编辑位
-		case ID_KEYMSG_EnterDown:
-		byEditDigit ++;
-		byEditDigit %= 4;
-		fnSetFlash(byEditDigit);
-		break;
-	}
-	
-	fnOutputChar(0, "code");
-	fnOutputChar(1, "set ");
-	fnOutputChar(2, byConfirmPassword);
-}
-
-//网络，选择测量信号的输入网络。函数返回测量信号的输入网络值
-unsigned int fnGetSetNet(unsigned char byMessage)
-{
-	switch(byMessage)
-	{
-		//按下Left,验证密码相应编辑位减少
-		case ID_KEYMSG_LeftDown:
-		if (sOSParameter.eNet == E_N33)
-		{
-			sOSParameter.eNet = E_N34;
-		}
-		else
-		{
-			sOSParameter.eNet = E_N33;
-		}
-		break;
-		//按下Right,验证密码相应编辑位增加
-		case ID_KEYMSG_RightDown:
-		if (sOSParameter.eNet == E_N33)
-		{
-			sOSParameter.eNet = E_N34;
-		}
-		else
-		{
-			sOSParameter.eNet = E_N33;
-		}
-		break;
-		//按下Menu，返回密码
-		case ID_KEYMSG_MenuDown:
-		eSystemState = E_MenuChoose;
-		break;
-		//按下Enter，改变参数编辑位
-		case ID_KEYMSG_EnterDown:
-		break;
-	}
-	
-	fnOutputChar(0, "set ");
-	fnOutputChar(1, "net ");
-	if (sOSParameter.eNet == E_N33)
-	{
-		fnOutputChar(2, "n.33 ");
-	}
-	else
-	{
-		fnOutputChar(2, "n.34 ");
-	}
-}
-
-
-unsigned int fnGetSetPT_U(unsigned char byMessage) //电压变比，设置电压信号变比=1次刻度/2次刻度，例：10KV/100V=100，函数返回电压变比值
-{
-	static char cTemp[4] = {'0', '0', '0', '0'};
-	static unsigned char byEditDigit = 0;
-	unsigned int uTemp;
-	
-	fnSetFlash(byEditDigit);
-	switch(byMessage)
-	{
-		//按下Left,验证密码相应编辑位减少
-		case ID_KEYMSG_LeftDown:
-		cTemp[byEditDigit] = cTemp[byEditDigit]=='0'?'9':(cTemp[byEditDigit]-1);
-		break;
-		//按下Right,验证密码相应编辑位增加
-		case ID_KEYMSG_RightDown:
-		cTemp[byEditDigit] = cTemp[byEditDigit]=='9'?'0':(cTemp[byEditDigit]+1);
-		break;
-		//按下Menu，返回密码
-		case ID_KEYMSG_MenuDown:
-		fnDisableFlash();
-		uTemp = fnComposeNum(cTemp);
-		if (uTemp > 5000)
-		{
-			sOSParameter.uRU = 5000;
-		}
-		else if (uTemp > 0 && uTemp <= 5000)
-		{
-			sOSParameter.uRU = uTemp;
-		}
-		byEditDigit = 0;
-		cTemp[0] = '0';
-		cTemp[1] = '0';
-		cTemp[2] = '0';
-		cTemp[3] = '0';
-		eSystemState = E_MenuChoose;
-		break;
-		//按下Enter，改变参数编辑位
-		case ID_KEYMSG_EnterDown:
-		byEditDigit ++;
-		byEditDigit %= 4;
-		fnSetFlash(byEditDigit);
-		break;
-	}
-	
-	fnOutputChar(0, "set ");
-	fnOutputChar(1, "pt .u ");
-	fnOutputChar(2, cTemp);
-}
-
-
-unsigned int fnGetSetCT_I(unsigned char byMessage) //获取电流变比值
-{
-	static char cTemp[4] = {'0', '0', '0', '0'};
-	static unsigned char byEditDigit = 0;
-	unsigned int uTemp;
-	
-	fnSetFlash(byEditDigit);
-	switch(byMessage)
-	{
-		//按下Left,验证密码相应编辑位减少
-		case ID_KEYMSG_LeftDown:
-		cTemp[byEditDigit] = cTemp[byEditDigit]=='0'?'9':(cTemp[byEditDigit]-1);
-		break;
-		//按下Right,验证密码相应编辑位增加
-		case ID_KEYMSG_RightDown:
-		cTemp[byEditDigit] = cTemp[byEditDigit]=='9'?'0':(cTemp[byEditDigit]+1);
-		break;
-		//按下Menu，返回密码
-		case ID_KEYMSG_MenuDown:
-		fnDisableFlash();
-		uTemp = fnComposeNum(cTemp);
-		if (uTemp > 5000)
-		{
-			sOSParameter.uRI = 5000;
-		}
-		else if (uTemp > 0 && uTemp <= 5000)
-		{
-			sOSParameter.uRI = uTemp;
-		}
-		byEditDigit = 0;
-		cTemp[0] = '0';
-		cTemp[1] = '0';
-		cTemp[2] = '0';
-		cTemp[3] = '0';
-		eSystemState = E_MenuChoose;
-		break;
-		//按下Enter，改变参数编辑位
-		case ID_KEYMSG_EnterDown:
-		byEditDigit ++;
-		byEditDigit %= 4;
-		fnSetFlash(byEditDigit);
-		break;
-	}
-	
-	fnOutputChar(0, "set ");
-	fnOutputChar(1, "ct .i ");
-	fnOutputChar(2, cTemp);
-}
-
-
-unsigned int fnGetSetE_CLE(unsigned char byMessage) //获取清电能
-{
-	switch(byMessage)
-	{
-		//按下Left,验证密码相应编辑位减少
-		case ID_KEYMSG_LeftDown:
-		if (sOSParameter.bClearEnergy == 0)
-		{
-			sOSParameter.bClearEnergy = 1;
-		}
-		else
-		{
-			sOSParameter.bClearEnergy = 0;
-		}
-		break;
-		//按下Right,验证密码相应编辑位增加
-		case ID_KEYMSG_RightDown:
-		if (sOSParameter.bClearEnergy == 0)
-		{
-			sOSParameter.bClearEnergy = 1;
-		}
-		else
-		{
-			sOSParameter.bClearEnergy = 0;
-		}
-		break;
-		//按下Menu，返回密码
-		case ID_KEYMSG_MenuDown:
-		eSystemState = E_MenuChoose;
-		break;
-		//按下Enter，改变参数编辑位
-		case ID_KEYMSG_EnterDown:
-		break;
-	}
-	
-	fnOutputChar(0, "set ");
-	fnOutputChar(1, "net ");
-	if (sOSParameter.bClearEnergy == 1)
-	{
-		fnOutputChar(2, "yes ");
-	}
-	else
-	{
-		fnOutputChar(2, "no  ");
-	}
-}
-
-
-unsigned char fnGetDisB_LED(unsigned char byMessage) //设置亮度显示
-{
-	switch(byMessage)
-	{
-		case ID_KEYMSG_LeftDown: //按下Left,验证密码相应编辑位减少，！！未写完！！
-		sOSParameter.byDisp --;
-		break;
-		case ID_KEYMSG_RightDown://按下Right,验证密码相应编辑位增加，！！未写完！！
-		sOSParameter.byDisp ++;
-		break;
-		case ID_KEYMSG_MenuDown://按下Menu，返回密码
-		break;
-		case ID_KEYMSG_EnterDown://按下Enter，改变参数编辑位
-		break;
 	}
 }
 
@@ -871,3 +291,244 @@ void fnDecomposeNum(unsigned int uNum, unsigned char *pbyaNum)
 		uNum /= 10;
 	}
 }
+
+
+//***********************显示*****************************************************************************************
+//数码管显示
+unsigned char fnDisplay()
+{
+	static volatile unsigned int wFlashTime = 0;
+	static volatile unsigned char byIsFlash = 0;
+	unsigned char byFlashContent;
+	
+	if(!(g_byDisplayEnable||g_byDisplayTime))
+	return 1;
+	
+	if(g_byFlashEnable)
+	{
+		wFlashTime++;
+		wFlashTime %= FlashTime;
+		if(!wFlashTime)
+		{
+			byIsFlash ++;
+			byIsFlash %= 2;
+		}
+	}
+	if(g_byFlashEnable&&byIsFlash)
+	{
+		byFlashContent = g_byaDisplayContents[2][g_byFlashDigit];
+		g_byaDisplayContents[2][g_byFlashDigit] = 0xff;
+	}
+	fnScanLED();
+	if(g_byFlashEnable&&byIsFlash)
+	g_byaDisplayContents[2][g_byFlashDigit] = byFlashContent;
+	
+	return 1;
+}
+
+//数码管扫描显示
+void fnScanLED()
+{
+	unsigned char byCnt;   //要显示的内容位置
+
+	PORTA = 0xff;
+	PORTG &= ~(1<<2);  	   //PG2 = 0
+	PORTC &= ~(1<<7);	   //PC7 = 0
+	PORTG  |= (1<<2);	   //PG2 = 1
+	
+	PORTC |= (1<<7);	   //PC7 = 1
+	
+	//显示第2行内容
+	for(byCnt = 0;byCnt < 4;byCnt ++)
+	{
+		PORTG &= ~(1<<2);
+		PORTA = g_byaDisplayContents[1][byCnt];
+		fnDelayDisplay( g_byDisplayLightness);
+		PORTA = 0xff;
+		fnDelayDisplay( MaxDisplayLightness - g_byDisplayLightness);
+		PORTG  |= (1<<2);
+	}
+	//显示第3行内容
+	for(byCnt = 0;byCnt < 4;byCnt ++)
+	{
+		PORTG &= ~(1<<2);
+		PORTA = g_byaDisplayContents[2][byCnt];
+		fnDelayDisplay( g_byDisplayLightness);
+		PORTA = 0xff;
+		fnDelayDisplay( MaxDisplayLightness - g_byDisplayLightness);
+		PORTG  |= (1<<2);
+	}
+	//显示第1行内容
+	for(byCnt = 0;byCnt < 4;byCnt ++)
+	{
+		PORTG &= ~(1<<2);
+		PORTA = g_byaDisplayContents[0][byCnt];
+		fnDelayDisplay( g_byDisplayLightness);
+		PORTA = 0xff;
+		fnDelayDisplay( MaxDisplayLightness - g_byDisplayLightness);
+		PORTG  |= (1<<2);
+	}
+	//显示指示灯
+	PORTG &= ~(1<<2);
+	PORTA = g_byaIndicator[0];
+	PORTB = (g_byaIndicator[1]&0x01)?(PORTB|0x01):(PORTB&0xfe); 
+	fnDelayDisplay( g_byDisplayLightness);
+	PORTA = 0xff;
+	PORTB |= 0x01; 
+	fnDelayDisplay( MaxDisplayLightness - g_byDisplayLightness);
+	PORTG  |= (1<<2);
+	
+}
+//********************************************************************************************************************
+
+
+//************************显示内容************************************************************************************
+//显示字符，程序将字符串中字母所对应的ASCII字符按数字处理换算，直接与显示字符数组一一对应。
+void fnOutputChar(unsigned char byDisplayRow, char * byChar )
+{
+	unsigned char i = 0;
+	if(byDisplayRow < 3 && byChar)
+	{
+		for (unsigned char j=0; j<4; j++ )
+		{
+			//大写字母：ASCII的值在65-90之间，将值减去55，对应到显示字符数组的10-35之间。
+			if((*(byChar+i)>64) && (*(byChar+i) < 91))
+			{
+				g_byaDisplayContents[byDisplayRow][j] = g_byaDisplayCode[*(byChar+i) - 55];
+			}
+			//小写字母：ASCII的值在97-122之间，将值减去87，对应到显示字符数组的10-35之间。
+			else if ( (*(byChar+i)>96 ) && (*(byChar+i)<123 ) )
+			{
+				g_byaDisplayContents[byDisplayRow][j] = g_byaDisplayCode[*(byChar+i) - 87];
+			}
+			////数字字母：ASCII的值在48-57之间，将值减去48，对应到显示字符数组的0-9之间。
+			else if ( (*(byChar+i)>47 ) && (*(byChar+i)<58 ) )
+			{
+				g_byaDisplayContents[byDisplayRow][j] = g_byaDisplayCode[*(byChar+i) - 48];
+			}
+			//如果为其他字符，一律为显示字符数组的36不显示。
+			else
+			{
+				g_byaDisplayContents[byDisplayRow][j] = g_byaDisplayCode[36];
+			}
+			
+			//如果当前字符不为空（ASC为0），并且也不为"."（ASC为46），i指向下一个字符。
+			if ((*(byChar+i)!=0)&&(*(byChar+i)!=46))
+			{
+				i++;
+			}			
+			//如果是“.” 字符，就显示点并且移动 i 去处理下一位字符
+			if (*(byChar+i) == 46)
+			{
+				g_byaDisplayContents[byDisplayRow][j] &= 0xef;
+				i++;
+			}
+		}
+	}
+}
+//显示数字
+void fnOutputNum(unsigned char byDisplayRow,float iNum)
+{
+	short int i,byFlag;
+	long iValue;
+	iValue = (long)(iNum*1000);
+	if (byDisplayRow < 3)
+	{
+		for (i= -3; i<0&&!(iValue%10); i++)
+		{
+			iValue /= 10;
+		}
+		for (byFlag = 3;byFlag>=0;byFlag --)
+		{
+			g_byaDisplayContents[byDisplayRow][byFlag] = ((i<=0)||iValue)?g_byaDisplayNumCode[iValue%10]:ID_DISCODE_NULL;
+			if(!i&&byFlag<3)
+			{
+				g_byaDisplayContents[byDisplayRow][byFlag] &= 0xef;			
+			}
+			iValue /= 10;
+			i++;
+		}
+	}
+}
+
+//显示数字字符
+void fnOutputNumChar(unsigned char byDisplayRow, unsigned char * pbyValue)
+{
+	if (byDisplayRow < 3)
+	{
+		g_byaDisplayContents[byDisplayRow][3] = g_byaDisplayNumCode[pbyValue[3]];
+		g_byaDisplayContents[byDisplayRow][2] = g_byaDisplayNumCode[pbyValue[2]];
+		g_byaDisplayContents[byDisplayRow][1] = g_byaDisplayNumCode[pbyValue[1]];
+		g_byaDisplayContents[byDisplayRow][0] = g_byaDisplayNumCode[pbyValue[0]];
+	}
+}
+
+//显示指示灯
+void fnOutputIndicator(unsigned int uValue)
+{
+	g_byaIndicator[0] = (unsigned char)uValue;
+	g_byaIndicator[1] = (unsigned char)(uValue>>8);
+}
+
+
+//****************************显示亮度********************************************************************************
+//设置显示亮度
+void fnSetDisplayLightness(unsigned char byDisplayLightness)
+{
+	if(byDisplayLightness < 7 )
+	g_byDisplayLightness = MaxDisplayLightness/6 * byDisplayLightness;
+}
+
+//发光二极管的显示亮度和发光二极管的显示时间有光，显示时间越长，发光二极管就越亮，因此显示延时时间的长度决定了发光二极管的实现亮度
+void fnDelayDisplay(unsigned char byDelayTime)
+{
+	unsigned char byCnt;
+	for(byCnt = 0; byCnt <byDelayTime; byCnt++);
+}
+//********************************************************************************************************************
+
+
+//*****************************显示时间********************************************************************************
+//复位当前显示时间，将当前显示时间设定为最大值
+void fnResetDisplayTime()
+{
+	g_byDisplayTime = MaxDisplayTime;
+	if(!g_byDisplayEnable)
+	//启动定时中断
+	;
+}
+
+//获取当前显示时间
+unsigned char fnGetDisplayTime()
+{
+	return g_byDisplayTime;
+}
+
+//使能显示标志位，显示标志位置1，数码管一直显示
+void fnEnableDisplay()
+{
+	g_byDisplayEnable = 1;
+}
+//失能显示标志位，显示标志位置0，数码管显示60S
+void fnDisableDisplay()
+{
+	g_byDisplayEnable = 0;
+}
+//*********************************************************************************************************************
+
+
+//****************************闪烁*************************************************************************************
+//关闭闪烁功能，闪烁标志位置0
+void fnDisableFlash()
+{
+	g_byFlashEnable = 0;
+}
+//开启闪烁功能，闪烁标志位置1
+void fnSetFlash(unsigned char byFlashDigit)
+{
+	g_byFlashEnable = 1;
+	if(byFlashDigit < 4)
+	g_byFlashDigit = byFlashDigit;
+}
+
+
