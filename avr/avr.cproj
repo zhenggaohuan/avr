@@ -27,15 +27,15 @@
     <BootSegment>2</BootSegment>
     <AsfFrameworkConfig>
       <framework-data>
-  <options />
-  <configurations />
-  <files />
-  <documentation help="" />
-  <offline-documentation help="" />
-  <dependencies>
-    <content-extension eid="atmel.asf" uuidref="Atmel.ASF" version="3.44.1" />
-  </dependencies>
-</framework-data>
+        <options />
+        <configurations />
+        <files />
+        <documentation help="" />
+        <offline-documentation help="" />
+        <dependencies>
+          <content-extension eid="atmel.asf" uuidref="Atmel.ASF" version="3.44.1" />
+        </dependencies>
+      </framework-data>
     </AsfFrameworkConfig>
     <avrtoolinterface>JTAG</avrtoolinterface>
     <avrtool>com.atmel.avrdbg.tool.jtagicemkii</avrtool>
@@ -153,31 +153,7 @@
     </ToolchainSettings>
   </PropertyGroup>
   <ItemGroup>
-    <Compile Include="Att7022.c">
-      <SubType>compile</SubType>
-    </Compile>
-    <Compile Include="Att7022.h">
-      <SubType>compile</SubType>
-    </Compile>
-    <Compile Include="Delay.c">
-      <SubType>compile</SubType>
-    </Compile>
-    <Compile Include="Delay.h">
-      <SubType>compile</SubType>
-    </Compile>
-    <Compile Include="Fm25040.c">
-      <SubType>compile</SubType>
-    </Compile>
-    <Compile Include="Fm25040.h">
-      <SubType>compile</SubType>
-    </Compile>
     <Compile Include="Main.c">
-      <SubType>compile</SubType>
-    </Compile>
-    <Compile Include="InputAndOutput.c">
-      <SubType>compile</SubType>
-    </Compile>
-    <Compile Include="InputAndOutput.h">
       <SubType>compile</SubType>
     </Compile>
   </ItemGroup>
